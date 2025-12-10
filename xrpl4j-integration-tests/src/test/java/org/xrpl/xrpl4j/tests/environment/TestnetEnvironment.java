@@ -33,7 +33,7 @@ public abstract class TestnetEnvironment extends AbstractXrplEnvironment impleme
 
   private final FaucetClient faucetClient =
     FaucetClient.construct(HttpUrl.parse("https://apex-faucet.altnet.rippletest.net"));
-
+ 
   @Override
   public abstract XrplClient getXrplClient();
 
