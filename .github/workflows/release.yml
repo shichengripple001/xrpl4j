@@ -1,0 +1,293 @@
+name: Release Pipeline (Maven Central)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_branch:
+        description: "Release branch to publish (e.g., release/7.0.0). Its pom version must be a non-SNAPSHOT version."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  input-validate:
+    name: Validate release inputs
+    runs-on: ubuntu-latest
+    outputs:
+      package_version: ${{ steps.version.outputs.version }}
+      is_beta_release: ${{ steps.version.outputs.is_beta }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.release_branch }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+          cache: maven
+      - name: Extract and validate version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TRIGGER_BRANCH: ${{ github.ref_name }}
+          RELEASE_BRANCH: ${{ github.event.inputs.release_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "$TRIGGER_BRANCH" != "main" ]]; then
+            echo "❌ Dispatch this workflow from main (current: $TRIGGER_BRANCH)." >&2; exit 1
+          fi
+          VERSION="$(mvn -q -N help:evaluate -Dexpression=project.version -DforceStdout)"
+          if [[ -z "$VERSION" || "$VERSION" == *SNAPSHOT* ]]; then
+            echo "❌ pom version '$VERSION' is empty or a SNAPSHOT; set a release version on the release branch." >&2; exit 1
+          fi
+          if [[ "$VERSION" =~ (rc|alpha|beta) ]]; then IS_BETA=true; else IS_BETA=false; fi
+          if [[ "$IS_BETA" != "true" && ! "${RELEASE_BRANCH,,}" =~ ^release[-/] ]]; then
+            echo "❌ Stable releases must come from a 'release-' or 'release/' branch." >&2; exit 1
+          fi
+          if gh api "repos/$REPO/git/ref/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "❌ Tag v${VERSION} already exists." >&2; exit 1
+          fi
+          if grep -R --exclude-dir=.git --exclude-dir=.github "artifactory.ops.ripple.com" .; then
+            echo "❌ Internal Artifactory URL found" >&2; exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "is_beta=$IS_BETA" >> "$GITHUB_OUTPUT"
+          echo "Detected version: $VERSION (beta=$IS_BETA)"
+
+  unit-tests:
+    name: Unit tests (JDK ${{ matrix.java }})
+    needs: input-validate
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java: [8, 11, 17, 21]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.release_branch }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+      - run: mvn -B clean install
+
+  pre-release:
+    name: Build, SBOM and vulnerability scan
+    needs: [input-validate, unit-tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      issues: write
+    outputs:
+      vuln_art_url: ${{ steps.vuln_art.outputs.art_url }}
+    env:
+      PACKAGE_VERSION: ${{ needs.input-validate.outputs.package_version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.release_branch }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+          cache: maven
+      - name: Build artifacts (no signing/publishing)
+        run: mvn -B clean package -DskipTests
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          find . -path ./dist -prune -o -type f \( -name '*.jar' -o -name '*.pom' \) -path '*/target/*' -print0 | xargs -0 -I{} cp {} dist/
+          cp pom.xml dist/xrpl4j-parent.pom
+          ls dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maven-distributions
+          path: dist/
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: "dist/*"
+      - name: Generate CycloneDX SBOM
+        run: mvn -B org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom -DoutputFormat=json -DoutputName=sbom
+      - name: Collect SBOM
+        run: cp target/sbom.json sbom.json && test -s sbom.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+      - name: Upload SBOM to OWASP Dependency-Track
+        run: |
+          curl -fsS -X POST \
+            -H "X-Api-Key: ${{ secrets.OWASP_TOKEN }}" \
+            -F "autoCreate=true" -F "projectName=xrpl4j" \
+            -F "projectVersion=${PACKAGE_VERSION}" -F "bom=@sbom.json" \
+            https://owasp-dt-api.prod.ripplex.io/api/v1/bom
+      - name: Scan SBOM with Trivy
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        with:
+          scan-type: sbom
+          scan-ref: sbom.json
+          format: table
+          exit-code: 0
+          output: vuln-report.txt
+          severity: CRITICAL,HIGH
+      - name: Evaluate scan report
+        id: scan
+        run: |
+          SUMMARY="$(grep -E '^Total:' vuln-report.txt || true)"
+          if printf '%s' "$SUMMARY" | grep -Eq '^Total:\s*0\s*\(HIGH:\s*0,\s*CRITICAL:\s*0\)$' || [[ -z "$SUMMARY" ]]; then
+            echo "✅ No CRITICAL/HIGH vulnerabilities" | tee -a vuln-report.txt
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+          cat vuln-report.txt
+      - name: Upload vulnerability report
+        id: upload_vuln
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulnerability-report
+          path: vuln-report.txt
+      - name: Build vulnerability artifact URL
+        id: vuln_art
+        run: echo "art_url=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload_vuln.outputs.artifact-id }}" >> "$GITHUB_OUTPUT"
+      - name: Open GitHub issue for vulnerabilities
+        if: steps.scan.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --label security \
+            --title "🔒 Security vulnerabilities in xrpl4j@${PACKAGE_VERSION}" \
+            --body "CRITICAL/HIGH vulnerabilities detected for \`xrpl4j@${PACKAGE_VERSION}\` on \`${{ github.event.inputs.release_branch }}\`. Report: ${{ steps.vuln_art.outputs.art_url }}"
+
+  ask_for_dev_team_review:
+    name: Request dev team review
+    needs: [input-validate, pre-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        env:
+          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+          MSG: "${{ github.triggering_actor || github.actor }} is releasing xrpl4j ${{ needs.input-validate.outputs.package_version }} from ${{ github.event.inputs.release_branch }}. The dev team needs to review the release artifacts and approve/reject. (https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+        run: |
+          curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer $SLACK_TOKEN" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "$(jq -n --arg channel "#xrpl4j" --arg text "$MSG" '{channel:$channel, text:$text}')" \
+            | jq -er '.ok' >/dev/null
+
+  first_review:
+    name: First approval (dev team)
+    needs: [pre-release, ask_for_dev_team_review]
+    runs-on: ubuntu-latest
+    environment:
+      name: first-review
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - run: echo "Dev team approved"
+
+  ask_for_sec_team_review:
+    name: Request security team review
+    needs: [input-validate, pre-release, first_review]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        env:
+          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+          MSG: "${{ github.triggering_actor || github.actor }} is releasing xrpl4j ${{ needs.input-validate.outputs.package_version }}. Security team: review vulnerabilities ${{ needs.pre-release.outputs.vuln_art_url }} and approve/reject. (https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+        run: |
+          curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer $SLACK_TOKEN" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "$(jq -n --arg channel "#ripplex-security" --arg text "$MSG" '{channel:$channel, text:$text}')" \
+            | jq -er '.ok' >/dev/null
+
+  publish-to-maven-central:
+    name: Publish to Maven Central
+    needs: [input-validate, pre-release, first_review, ask_for_sec_team_review]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: ${{ needs.input-validate.outputs.is_beta_release == 'true' && 'beta-release' || 'official-release' }}
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Prevent second attempt
+        run: |
+          if (( ${GITHUB_RUN_ATTEMPT:-1} > 1 )); then
+            echo "❌ Reruns are not allowed." >&2; exit 1
+          fi
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.release_branch }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+          cache: maven
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+      - name: Deploy (signed, via central-publishing-maven-plugin)
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: mvn -B clean deploy -Prelease -DskipTests
+
+  github-release:
+    name: GitHub Release
+    needs: [input-validate, publish-to-maven-central]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      PACKAGE_VERSION: ${{ needs.input-validate.outputs.package_version }}
+      IS_BETA_RELEASE: ${{ needs.input-validate.outputs.is_beta_release }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: maven-distributions
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: sbom
+          path: sbom/
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.PACKAGE_VERSION }}
+          target_commitish: ${{ github.event.inputs.release_branch }}
+          generate_release_notes: true
+          prerelease: ${{ env.IS_BETA_RELEASE == 'true' }}
+          make_latest: ${{ env.IS_BETA_RELEASE != 'true' }}
+          files: |
+            dist/**
+            sbom/**
+      - name: Notify Slack success
+        env:
+          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+        run: |
+          MSG="xrpl4j ${PACKAGE_VERSION} has been released to Maven Central. https://github.com/${{ github.repository }}/releases/tag/v${PACKAGE_VERSION}"
+          curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer $SLACK_TOKEN" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "$(jq -n --arg channel "#xrpl4j" --arg text "$MSG" '{channel:$channel, text:$text}')" \
+            | jq -er '.ok' >/dev/null
