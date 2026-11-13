@@ -4,8 +4,8 @@
   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <parent>
     <artifactId>xrpl4j-parent</artifactId>
-    <groupId>org.xrpl</groupId>
-    <version>HEAD-SNAPSHOT</version>
+    <groupId>io.github.shichengripple001</groupId>
+    <version>0.0.1-rc1</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
 
