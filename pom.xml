@@ -339,7 +339,7 @@
                   <ignoredDependency>com.google.errorprone:error_prone_annotations</ignoredDependency>
                   <ignoredDependency>ch.qos.logback:logback-classic</ignoredDependency>
                   <!-- Loaded via reflection-->
-                  <ignoredDependency>org.xrpl:xrpl4j-mpt-crypto</ignoredDependency>
+                  <ignoredDependency>io.github.shichengripple001:xrpl4j-mpt-crypto</ignoredDependency>
                   <!-- As part of SkyStreamer, but only for test scope-->
                   <ignoredDependency>com.vaadin.external.google:android-json</ignoredDependency>
                   <ignoredDependency>org.junit.jupiter:junit-jupiter-engine</ignoredDependency>
