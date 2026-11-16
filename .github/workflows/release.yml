@@ -78,8 +78,6 @@ jobs:
     with:
       git_ref: ${{ github.event.inputs.release_branch }}
       skip_codecov: true
-      # Network/faucet-dependent jobs gate stable releases only (same as xrpl-py)
-      skip_network_tests: ${{ needs.input-validate.outputs.is_beta_release == 'true' }}
     secrets: inherit
 
   pre-release:
