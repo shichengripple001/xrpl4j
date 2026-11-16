@@ -59,6 +59,9 @@ jobs:
             echo "❌ pom version '$VERSION' is empty or a SNAPSHOT; set a release version on the release branch." >&2; exit 1
           fi
           if [[ "$VERSION" =~ (rc|alpha|beta) ]]; then IS_BETA=true; else IS_BETA=false; fi
+          if [[ "$IS_BETA" != "true" && ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Stable version must be X.Y.Z (got '$VERSION'). Use an rc/alpha/beta suffix for pre-releases." >&2; exit 1
+          fi
           if [[ "$IS_BETA" != "true" && ! "${RELEASE_BRANCH,,}" =~ ^release[-/] ]]; then
             echo "❌ Stable releases must come from a 'release-' or 'release/' branch." >&2; exit 1
           fi
@@ -251,6 +254,14 @@ jobs:
         run: |
           if (( ${GITHUB_RUN_ATTEMPT:-1} > 1 )); then
             echo "❌ Reruns are not allowed." >&2; exit 1
+          fi
+      - name: Re-check version format before publishing
+        env:
+          VERSION: ${{ needs.input-validate.outputs.package_version }}
+          IS_BETA: ${{ needs.input-validate.outputs.is_beta_release }}
+        run: |
+          if [[ "$IS_BETA" != "true" && ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Stable version must be X.Y.Z (got '$VERSION')." >&2; exit 1
           fi
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
