@@ -71,27 +71,20 @@ jobs:
           echo "is_beta=$IS_BETA" >> "$GITHUB_OUTPUT"
           echo "Detected version: $VERSION (beta=$IS_BETA)"
 
-  unit-tests:
-    name: Unit tests (JDK ${{ matrix.java }})
+  ci-tests:
+    name: CI build and tests
     needs: input-validate
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        java: [8, 11, 17, 21]
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          ref: ${{ github.event.inputs.release_branch }}
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
-        with:
-          distribution: temurin
-          java-version: ${{ matrix.java }}
-          cache: maven
-      - run: mvn -B clean install
+    uses: ./.github/workflows/workflow.yml
+    with:
+      git_ref: ${{ github.event.inputs.release_branch }}
+      skip_codecov: true
+      # Network/faucet-dependent jobs gate stable releases only (same as xrpl-py)
+      skip_network_tests: ${{ needs.input-validate.outputs.is_beta_release == 'true' }}
+    secrets: inherit
 
   pre-release:
     name: Build, SBOM and vulnerability scan
-    needs: [input-validate, unit-tests]
+    needs: [input-validate, ci-tests]
     runs-on: ubuntu-latest
     permissions:
       contents: read
