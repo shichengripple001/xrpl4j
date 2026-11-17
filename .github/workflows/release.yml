@@ -62,7 +62,7 @@ jobs:
           if [[ "$IS_BETA" != "true" && ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "❌ Stable version must be X.Y.Z (got '$VERSION'). Use an rc/alpha/beta suffix for pre-releases." >&2; exit 1
           fi
-          if [[ "$IS_BETA" != "true" && ! "${RELEASE_BRANCH,,}" =~ ^release[-/] ]]; then
+          if [[ "$IS_BETA" != "true" && ! "${RELEASE_BRANCH,,}" =~ ^releases?[-/] ]]; then
             echo "❌ Stable releases must come from a 'release-' or 'release/' branch." >&2; exit 1
           fi
           if gh api "repos/$REPO/git/ref/tags/v${VERSION}" >/dev/null 2>&1; then
