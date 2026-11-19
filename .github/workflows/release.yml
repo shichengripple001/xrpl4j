@@ -133,7 +133,7 @@ jobs:
         run: |
           set -euo pipefail
           GROUP="$(mvn -q -N help:evaluate -Dexpression=project.groupId -DforceStdout)"
-          GROUP_PATH="${GROUP//./\/}"
+          GROUP_PATH="$(printf '%s' "$GROUP" | tr . /)"
           SRC="$HOME/.m2/repository/$GROUP_PATH"
           mkdir -p bundle dist dl
           # only this exact version of each module; only jars and poms (no repository bookkeeping files)
