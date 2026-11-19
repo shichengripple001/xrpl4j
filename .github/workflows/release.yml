@@ -76,7 +76,7 @@ jobs:
           echo "Detected version: $VERSION (beta=$IS_BETA)"
 
   ci-tests:
-    name: CI build and tests (${{ needs.input-validate.outputs.package_version }})
+    name: CI build and tests (${{ needs.input-validate.outputs.package_version }}, ${{ needs.input-validate.outputs.is_beta_release == 'true' && 'beta' || 'official' }})
     needs: input-validate
     uses: ./.github/workflows/workflow.yml
     with:
@@ -87,7 +87,7 @@ jobs:
     secrets: inherit
 
   pre-release:
-    name: Build, SBOM and vulnerability scan (${{ needs.input-validate.outputs.package_version }})
+    name: Build, SBOM and vulnerability scan (${{ needs.input-validate.outputs.package_version }}, ${{ needs.input-validate.outputs.is_beta_release == 'true' && 'beta' || 'official' }})
     needs: [input-validate, ci-tests]
     runs-on: ubuntu-latest
     permissions:
@@ -244,7 +244,7 @@ jobs:
             | jq -er '.ok' >/dev/null
 
   publish-to-maven-central:
-    name: Publish to Maven Central (${{ needs.input-validate.outputs.package_version }})
+    name: Publish to Maven Central (${{ needs.input-validate.outputs.package_version }}, ${{ needs.input-validate.outputs.is_beta_release == 'true' && 'beta' || 'official' }})
     needs: [input-validate, pre-release, first_review, ask_for_sec_team_review]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -339,7 +339,7 @@ jobs:
         run: mvn -B clean deploy -Prelease -DskipTests -Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE"
 
   github-release:
-    name: GitHub Release (${{ needs.input-validate.outputs.package_version }})
+    name: GitHub Release (${{ needs.input-validate.outputs.package_version }}, ${{ needs.input-validate.outputs.is_beta_release == 'true' && 'beta' || 'official' }})
     needs: [input-validate, publish-to-maven-central]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
