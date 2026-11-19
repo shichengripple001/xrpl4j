@@ -125,28 +125,29 @@ jobs:
           distribution: temurin
           java-version: '8'
           cache: maven
-          # The Central plugin reads credentials for server id "central" even when publishing is skipped. Real
-          # credentials are never exposed to this job; placeholders make any accidental upload fail authentication.
-          server-id: central
-          server-username: MAVEN_CENTRAL_USERNAME
-          server-password: MAVEN_CENTRAL_PASSWORD
       # Build ONCE here: the files in this bundle are attested below and later published unchanged (only signed).
-      - name: Build unsigned Maven Central bundle (no signing, no upload)
-        env:
-          MAVEN_CENTRAL_USERNAME: unused-placeholder
-          MAVEN_CENTRAL_PASSWORD: unused-placeholder
-        run: mvn -B clean deploy -Prelease -DskipTests -Dgpg.skip=true -DskipPublishing=true
-      - name: Collect artifacts
+      # `install` does not run the Central publishing plugin (bound to `deploy`), so no Central credentials are needed here.
+      - name: Build unsigned artifacts (no signing, no upload)
+        run: mvn -B clean install -Prelease -DskipTests -Dgpg.skip=true
+      - name: Collect artifacts into a Maven Central bundle
         run: |
           set -euo pipefail
-          BUNDLE="$(find target -name central-bundle.zip -type f | head -n1)"
-          [[ -n "$BUNDLE" ]] || { echo "❌ central-bundle.zip was not produced" >&2; exit 1; }
+          GROUP="$(mvn -q -N help:evaluate -Dexpression=project.groupId -DforceStdout)"
+          GROUP_PATH="${GROUP//./\/}"
+          SRC="$HOME/.m2/repository/$GROUP_PATH"
           mkdir -p bundle dist dl
-          cp "$BUNDLE" dl/central-bundle.zip
-          unzip -q dl/central-bundle.zip -d bundle
+          # only this exact version of each module; only jars and poms (no repository bookkeeping files)
+          for d in "$SRC"/*/"$PACKAGE_VERSION"; do
+            [[ -d "$d" ]] || continue
+            art="$(basename "$(dirname "$d")")"
+            dest="bundle/$GROUP_PATH/$art/$PACKAGE_VERSION"
+            mkdir -p "$dest"
+            find "$d" -maxdepth 1 -type f \( -name '*.jar' -o -name '*.pom' \) -exec cp {} "$dest/" \;
+          done
           find bundle -type f \( -name '*.jar' -o -name '*.pom' \) -print0 | xargs -0 -I{} cp {} dist/
-          ls dist
-          [[ -n "$(ls dist)" ]] || { echo "❌ no artifacts in bundle" >&2; exit 1; }
+          (cd bundle && zip -qr ../dl/central-bundle.zip .)
+          echo "--- bundle contents:"; (cd bundle && find . -type f | sort)
+          [[ -n "$(ls dist)" ]] || { echo "❌ no artifacts collected" >&2; exit 1; }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: maven-distributions
