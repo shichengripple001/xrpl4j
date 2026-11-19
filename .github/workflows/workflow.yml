@@ -283,28 +283,6 @@ jobs:
             network: local-rippled
             it_flags: ''
             setup_qemu: true
-          # Intel macOS runners have no Docker preinstalled, but support virtualization, so
-          # Colima provides a Docker engine for the rippled Testcontainer.
-          - os: macos-15-intel
-            platform: darwin-x86-64
-            java: '8'
-            network: local-rippled
-            it_flags: ''
-            setup_docker_via_colima: true
-          # ARM macOS runners cannot run Docker at all (Apple's Virtualization Framework does not
-          # support nested virtualization), and Windows runners cannot run Linux containers, so
-          # these platforms run the confidential MPT ITs against Devnet instead of a local rippled.
-          # Temurin doesn't ship JDK 8 for macOS ARM64, so we use JDK 11 there.
-          - os: macos-15
-            platform: darwin-aarch64
-            java: '11'
-            network: devnet
-            it_flags: '-DuseDevnet'
-          - os: windows-latest
-            platform: win32-x86-64
-            java: '8'
-            network: devnet
-            it_flags: '-DuseDevnet'
     runs-on: ${{ matrix.os }}
     env:
       XRPLD_DOCKER_IMAGE: ${{ needs.resolve_xrpld_image.outputs.image }}
@@ -346,8 +324,6 @@ jobs:
       - name: Build and run unit tests
         run: mvn clean install -DskipITs -Dmaven.javadoc.skip=true
       - name: Run Confidential MPT ITs
-        # Devnet rows depend on a live network; skipped for beta/rc releases
-        if: ${{ !(inputs.skip_network_tests && matrix.network == 'devnet') }}
         run: mvn -pl xrpl4j-integration-tests verify -Dit.test='Confidential*IT' -Dfailsafe.failIfNoSpecifiedTests=true ${{ matrix.it_flags }} -Dmaven.javadoc.skip=true
       # Only the linux-x86-64 leg (real native library against a local rippled Testcontainer, the most
       # deterministic environment) feeds the aggregate report - the other legs exist for cross-platform native
@@ -364,6 +340,76 @@ jobs:
           flags: aggregate
           disable_search: true
           fail_ci_if_error: false
+
+  # Non-Linux native checks (macOS Intel/ARM, Windows). Skipped for beta/rc releases: they depend on scarce macOS
+  # runners and/or live networks, matching how xrpl-py/xrpl.js skip network-dependent tests for pre-releases.
+  build_confidential_native_its_cross_platform:
+    if: ${{ !inputs.skip_network_tests }}
+    name: confidential_native_${{ matrix.platform }}_${{ matrix.network }}
+    needs: resolve_xrpld_image
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Intel macOS runners have no Docker preinstalled, but support virtualization, so
+          # Colima provides a Docker engine for the rippled Testcontainer.
+          - os: macos-15-intel
+            platform: darwin-x86-64
+            java: '8'
+            network: local-rippled
+            it_flags: ''
+            setup_docker_via_colima: true
+          # ARM macOS runners cannot run Docker at all (Apple's Virtualization Framework does not
+          # support nested virtualization), and Windows runners cannot run Linux containers, so
+          # these platforms run the confidential MPT ITs against Devnet instead of a local rippled.
+          # Temurin doesn't ship JDK 8 for macOS ARM64, so we use JDK 11 there.
+          - os: macos-15
+            platform: darwin-aarch64
+            java: '11'
+            network: devnet
+            it_flags: '-DuseDevnet'
+          - os: windows-latest
+            platform: win32-x86-64
+            java: '8'
+            network: devnet
+            it_flags: '-DuseDevnet'
+    runs-on: ${{ matrix.os }}
+    env:
+      XRPLD_DOCKER_IMAGE: ${{ needs.resolve_xrpld_image.outputs.image }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Checks-out the repository under $GITHUB_WORKSPACE
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.git_ref }}
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: ${{ matrix.java }}
+          cache: 'maven'
+      - name: Set up Docker via Colima
+        if: matrix.setup_docker_via_colima
+        run: |
+          brew install colima docker
+          colima start --cpus 3 --memory 8
+          echo "DOCKER_HOST=unix://$HOME/.colima/default/docker.sock" >> "$GITHUB_ENV"
+          echo "TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock" >> "$GITHUB_ENV"
+      # Only the local-rippled rows pull an xrpld image, so only they need the registry login. This step must follow
+      # the Colima setup above, which is what provides the Docker daemon on the macOS Intel runner.
+      - name: Log in to private registry
+        if: matrix.network == 'local-rippled'
+        uses: ./.github/actions/xrpld-login
+        with:
+          is_private: ${{ needs.resolve_xrpld_image.outputs.is_private }}
+          username: ${{ vars.GITLAB_REGISTRY_USERNAME }}
+          token: ${{ secrets.GITLAB_REGISTRY_TOKEN }}
+      - name: Build and run unit tests
+        run: mvn clean install -DskipITs -Dmaven.javadoc.skip=true
+      - name: Run Confidential MPT ITs
+        run: mvn -pl xrpl4j-integration-tests verify -Dit.test='Confidential*IT' -Dfailsafe.failIfNoSpecifiedTests=true ${{ matrix.it_flags }} -Dmaven.javadoc.skip=true
 
   build_devnet_its:
     if: ${{ !inputs.skip_network_tests }}

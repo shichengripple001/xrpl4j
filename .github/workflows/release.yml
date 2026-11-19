@@ -82,6 +82,8 @@ jobs:
     with:
       git_ref: ${{ github.event.inputs.release_branch }}
       skip_codecov: true
+      # Beta/rc releases skip live-network and non-Linux jobs, like xrpl-py/xrpl.js skip network tests for pre-releases
+      skip_network_tests: ${{ needs.input-validate.outputs.is_beta_release == 'true' }}
     secrets: inherit
 
   pre-release:
