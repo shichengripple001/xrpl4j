@@ -125,18 +125,28 @@ jobs:
           distribution: temurin
           java-version: '8'
           cache: maven
-      - name: Build artifacts (no signing/publishing)
-        run: mvn -B clean package -DskipTests
+      # Build ONCE here: the files in this bundle are attested below and later published unchanged (only signed).
+      - name: Build unsigned Maven Central bundle (no signing, no upload)
+        run: mvn -B clean deploy -Prelease -DskipTests -Dgpg.skip=true -DskipPublishing=true
       - name: Collect artifacts
         run: |
-          mkdir -p dist
-          find . -path ./dist -prune -o -type f \( -name '*.jar' -o -name '*.pom' \) -path '*/target/*' -print0 | xargs -0 -I{} cp {} dist/
-          cp pom.xml dist/xrpl4j-parent.pom
+          set -euo pipefail
+          BUNDLE="$(find target -name central-bundle.zip -type f | head -n1)"
+          [[ -n "$BUNDLE" ]] || { echo "❌ central-bundle.zip was not produced" >&2; exit 1; }
+          mkdir -p bundle dist dl
+          cp "$BUNDLE" dl/central-bundle.zip
+          unzip -q dl/central-bundle.zip -d bundle
+          find bundle -type f \( -name '*.jar' -o -name '*.pom' \) -print0 | xargs -0 -I{} cp {} dist/
           ls dist
+          [[ -n "$(ls dist)" ]] || { echo "❌ no artifacts in bundle" >&2; exit 1; }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: maven-distributions
           path: dist/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: maven-central-bundle
+          path: dl/central-bundle.zip
       - name: Attest build provenance
         uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
         with:
@@ -283,9 +293,6 @@ jobs:
           distribution: temurin
           java-version: '8'
           cache: maven
-          server-id: central
-          server-username: MAVEN_CENTRAL_USERNAME
-          server-password: MAVEN_CENTRAL_PASSWORD
           gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
       - name: Prepare GnuPG for non-interactive signing (loopback pinentry)
@@ -296,47 +303,100 @@ jobs:
           echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
           gpgconf --kill gpg-agent || true
           gpg --list-secret-keys --keyid-format long
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: maven-central-bundle
+          path: dl/
+      - name: Verify provenance of the bundle files (must be the attested build)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p bundle
+          unzip -q dl/central-bundle.zip -d bundle
+          n=0
+          while IFS= read -r f; do
+            gh attestation verify "$f" --repo "$REPO" >/dev/null \
+              || { echo "❌ No valid build provenance for $f" >&2; exit 1; }
+            n=$((n+1))
+          done < <(find bundle -type f \( -name '*.jar' -o -name '*.pom' \))
+          [[ "$n" -gt 0 ]] || { echo "❌ bundle has no jars/poms" >&2; exit 1; }
+          echo "✅ provenance verified for $n files"
       - name: Sign artifacts and verify signatures
         env:
           MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
-          mvn -B clean verify -Prelease -DskipTests -Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE"
+          is_aux() { case "$1" in *.md5|*.sha1|*.sha256|*.sha512|*.asc|*/maven-metadata*) return 0;; *) return 1;; esac; }
 
-          # fingerprints of the imported signing key (primary + subkeys)
+          # 1) sign every artifact in the attested bundle (detached, armored), without rebuilding anything
+          signed=0
+          while IFS= read -r f; do
+            is_aux "$f" && continue
+            gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --armor --detach-sign --output "$f.asc" "$f" <<< "$MAVEN_GPG_PASSPHRASE"
+            signed=$((signed+1))
+          done < <(find bundle -type f)
+          [[ "$signed" -gt 0 ]] || { echo "❌ nothing to sign" >&2; exit 1; }
+
+          # 2) make sure every file (including the new .asc files) has md5/sha1/sha256/sha512 checksums
+          while IFS= read -r f; do
+            case "$f" in *.md5|*.sha1|*.sha256|*.sha512) continue;; esac
+            [[ -f "$f.md5"    ]] || md5sum    "$f" | cut -d' ' -f1 > "$f.md5"
+            [[ -f "$f.sha1"   ]] || sha1sum   "$f" | cut -d' ' -f1 > "$f.sha1"
+            [[ -f "$f.sha256" ]] || sha256sum "$f" | cut -d' ' -f1 > "$f.sha256"
+            [[ -f "$f.sha512" ]] || sha512sum "$f" | cut -d' ' -f1 > "$f.sha512"
+          done < <(find bundle -type f)
+
+          # 3) verify: every artifact has a signature that verifies and was made by the imported key
           FPRS="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10}')"
           [[ -n "$FPRS" ]] || { echo "❌ No imported signing key found" >&2; exit 1; }
-
           fail=0; checked=0
-          # 1) every jar must have a signature
-          while IFS= read -r jar; do
-            case "$jar" in */original-*) continue;; esac
-            if [[ ! -f "$jar.asc" ]]; then echo "❌ Missing signature: $jar.asc" >&2; fail=1; fi
-          done < <(find . -maxdepth 3 -path "*/target/*.jar" -type f)
-
-          # 2) every signature must verify, and be made by the imported key
-          while IFS= read -r asc; do
-            data="${asc%.asc}"
-            if [[ ! -f "$data" && "$asc" == *.pom.asc ]]; then data="$(dirname "$(dirname "$asc")")/pom.xml"; fi
-            [[ -f "$data" ]] || { echo "❌ No data file for $asc" >&2; fail=1; continue; }
-            STATUS="$(gpg --status-fd 1 --verify "$asc" "$data" 2>/dev/null || true)"
+          while IFS= read -r f; do
+            is_aux "$f" && continue
+            asc="$f.asc"
+            [[ -f "$asc" ]] || { echo "❌ Missing signature: $asc" >&2; fail=1; continue; }
+            STATUS="$(gpg --status-fd 1 --verify "$asc" "$f" 2>/dev/null || true)"
             VALID="$(printf '%s\n' "$STATUS" | grep '^\[GNUPG:\] VALIDSIG' || true)"
             if [[ -z "$VALID" ]]; then echo "❌ Signature does not verify: $asc" >&2; fail=1; continue; fi
             SIGNER="$(printf '%s' "$VALID" | awk '{print $3}')"; PRIMARY="$(printf '%s' "$VALID" | awk '{print $NF}')"
             if ! grep -qx -e "$SIGNER" -e "$PRIMARY" <<< "$FPRS"; then echo "❌ $asc was not signed by the imported key ($SIGNER)" >&2; fail=1; continue; fi
             checked=$((checked+1))
-          done < <(find . -maxdepth 3 -path "*/target/*.asc" -type f)
-
-          if [[ "$checked" -eq 0 ]]; then echo "❌ No signatures were produced" >&2; fail=1; fi
+          done < <(find bundle -type f)
+          [[ "$checked" -gt 0 ]] || { echo "❌ No signatures were produced" >&2; fail=1; }
           [[ "$fail" -eq 0 ]] || exit 1
-          echo "✅ $checked signatures present, valid, and made by the imported key"
-      - name: Deploy (signed, via central-publishing-maven-plugin)
+          echo "✅ $checked artifacts signed; all signatures valid and made by the imported key"
+
+          (cd bundle && zip -qr ../central-bundle-signed.zip .)
+          ls -l central-bundle-signed.zip
+      - name: Upload signed bundle to Maven Central (manual publish in the Portal)
         if: ${{ !inputs.dry_run }}
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
-          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
-        run: mvn -B clean deploy -Prelease -DskipTests -Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE"
+          VERSION: ${{ needs.input-validate.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          AUTH="$(printf '%s:%s' "$MAVEN_CENTRAL_USERNAME" "$MAVEN_CENTRAL_PASSWORD" | base64 | tr -d '\n')"
+          echo "::add-mask::$AUTH"
+          ID="$(curl -fsS -X POST -H "Authorization: Bearer $AUTH" \
+                 -F "bundle=@central-bundle-signed.zip" \
+                 "https://central.sonatype.com/api/v1/publisher/upload?name=xrpl4j-${VERSION}&publishingType=USER_MANAGED" | tr -d '"[:space:]')"
+          [[ -n "$ID" ]] || { echo "❌ Central returned no deployment id" >&2; exit 1; }
+          echo "Deployment id: $ID"
+          deadline=$((SECONDS+1500))
+          while (( SECONDS < deadline )); do
+            RESP="$(curl -fsS -X POST -H "Authorization: Bearer $AUTH" "https://central.sonatype.com/api/v1/publisher/status?id=$ID")"
+            STATE="$(jq -r '.deploymentState' <<< "$RESP")"
+            echo "state=$STATE"
+            case "$STATE" in
+              VALIDATED) echo "✅ Validated. Review and Publish (or Drop) at https://central.sonatype.com/publishing/deployments"; exit 0;;
+              PUBLISHING|PUBLISHED) echo "✅ $STATE"; exit 0;;
+              FAILED) echo "❌ Central validation failed:" >&2; jq . <<< "$RESP" >&2; exit 1;;
+            esac
+            sleep 10
+          done
+          echo "❌ Timed out waiting for Central validation" >&2; exit 1
 
   github-release:
     name: GitHub Release (${{ needs.input-validate.outputs.package_version }}, ${{ needs.input-validate.outputs.is_beta_release == 'true' && 'beta' || 'official' }})
