@@ -378,7 +378,7 @@ jobs:
 
           (cd bundle && zip -qr ../central-bundle-signed.zip .)
           ls -l central-bundle-signed.zip
-      - name: Upload signed bundle to Maven Central (manual publish in the Portal)
+      - name: Upload signed bundle to Maven Central (auto-publish after validation)
         if: ${{ !inputs.dry_run }}
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
@@ -390,7 +390,7 @@ jobs:
           echo "::add-mask::$AUTH"
           ID="$(curl -fsS -X POST -H "Authorization: Bearer $AUTH" \
                  -F "bundle=@central-bundle-signed.zip" \
-                 "https://central.sonatype.com/api/v1/publisher/upload?name=xrpl4j-${VERSION}&publishingType=USER_MANAGED" | tr -d '"[:space:]')"
+                 "https://central.sonatype.com/api/v1/publisher/upload?name=xrpl4j-${VERSION}&publishingType=AUTOMATIC" | tr -d '"[:space:]')"
           [[ -n "$ID" ]] || { echo "❌ Central returned no deployment id" >&2; exit 1; }
           echo "Deployment id: $ID"
           deadline=$((SECONDS+1500))
@@ -399,8 +399,7 @@ jobs:
             STATE="$(jq -r '.deploymentState' <<< "$RESP")"
             echo "state=$STATE"
             case "$STATE" in
-              VALIDATED) echo "✅ Validated. Review and Publish (or Drop) at https://central.sonatype.com/publishing/deployments"; exit 0;;
-              PUBLISHING|PUBLISHED) echo "✅ $STATE"; exit 0;;
+              PUBLISHED) echo "✅ Published to Maven Central (it can take a while to appear on repo1.maven.org)"; exit 0;;
               FAILED) echo "❌ Central validation failed:" >&2; jq . <<< "$RESP" >&2; exit 1;;
             esac
             sleep 10
