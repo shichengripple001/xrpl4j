@@ -125,8 +125,16 @@ jobs:
           distribution: temurin
           java-version: '8'
           cache: maven
+          # The Central plugin reads credentials for server id "central" even when publishing is skipped. Real
+          # credentials are never exposed to this job; placeholders make any accidental upload fail authentication.
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
       # Build ONCE here: the files in this bundle are attested below and later published unchanged (only signed).
       - name: Build unsigned Maven Central bundle (no signing, no upload)
+        env:
+          MAVEN_CENTRAL_USERNAME: unused-placeholder
+          MAVEN_CENTRAL_PASSWORD: unused-placeholder
         run: mvn -B clean deploy -Prelease -DskipTests -Dgpg.skip=true -DskipPublishing=true
       - name: Collect artifacts
         run: |
