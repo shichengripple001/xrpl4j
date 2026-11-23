@@ -270,6 +270,9 @@ jobs:
     environment:
       name: ${{ needs.input-validate.outputs.is_beta_release == 'true' && 'beta-release' || 'official-release' }}
       url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    permissions:
+      contents: read
+      id-token: write # keyless Sigstore signing (the certificate names this repo, workflow, commit and run)
     steps:
       - name: Prevent second attempt
         run: |
@@ -332,12 +335,28 @@ jobs:
           done < <(find bundle -type f \( -name '*.jar' -o -name '*.pom' \))
           [[ "$n" -gt 0 ]] || { echo "❌ bundle has no jars/poms" >&2; exit 1; }
           echo "✅ provenance verified for $n files"
+      - name: Sign artifacts with Sigstore (keyless) and verify
+        env:
+          # e.g. https://github.com/XRPLF/xrpl4j/.github/workflows/release.yml@refs/heads/main
+          CERT_IDENTITY: https://github.com/${{ github.workflow_ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/sigstore-venv
+          /tmp/sigstore-venv/bin/pip install -q sigstore==4.6.0
+          mapfile -t files < <(find bundle -type f \( -name '*.jar' -o -name '*.pom' \) | sort)
+          [[ "${#files[@]}" -gt 0 ]] || { echo "❌ nothing to sign" >&2; exit 1; }
+          # writes <file>.sigstore.json next to each file; Central validates these on upload
+          /tmp/sigstore-venv/bin/sigstore sign "${files[@]}"
+          /tmp/sigstore-venv/bin/sigstore verify github --cert-identity "$CERT_IDENTITY" --repository "$REPO" "${files[@]}"
+          echo "✅ ${#files[@]} files signed with Sigstore by $CERT_IDENTITY"
       - name: Sign artifacts and verify signatures
         env:
           MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
-          is_aux() { case "$1" in *.md5|*.sha1|*.sha256|*.sha512|*.asc|*/maven-metadata*) return 0;; *) return 1;; esac; }
+          # .sigstore.json files get checksums but no GPG signature (same layout as dev.sigstore:sigstore-java on Central)
+          is_aux() { case "$1" in *.md5|*.sha1|*.sha256|*.sha512|*.asc|*.sigstore.json|*/maven-metadata*) return 0;; *) return 1;; esac; }
 
           # 1) sign every artifact in the attested bundle (detached, armored), without rebuilding anything
           signed=0
