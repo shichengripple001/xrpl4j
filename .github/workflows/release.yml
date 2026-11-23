@@ -13,6 +13,11 @@ on:
         required: false
         type: boolean
         default: false
+      skip_ci_tests:
+        description: "FORK TESTING ONLY - skip the CI test suite (never in the XRPLF PR)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -78,6 +83,7 @@ jobs:
   ci-tests:
     name: CI build and tests (${{ needs.input-validate.outputs.package_version }}, ${{ needs.input-validate.outputs.is_beta_release == 'true' && 'beta' || 'official' }})
     needs: input-validate
+    if: ${{ !inputs.skip_ci_tests }}
     uses: ./.github/workflows/workflow.yml
     with:
       git_ref: ${{ github.event.inputs.release_branch }}
@@ -89,6 +95,7 @@ jobs:
   pre-release:
     name: Build, SBOM and vulnerability scan (${{ needs.input-validate.outputs.package_version }}, ${{ needs.input-validate.outputs.is_beta_release == 'true' && 'beta' || 'official' }})
     needs: [input-validate, ci-tests]
+    if: ${{ !cancelled() && needs.input-validate.result == 'success' && (needs.ci-tests.result == 'success' || needs.ci-tests.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
