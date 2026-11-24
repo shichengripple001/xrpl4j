@@ -169,10 +169,28 @@ jobs:
           GROUP_PATH="$(printf '%s' "$GROUP" | tr . /)"
           SRC="$HOME/.m2/repository/$GROUP_PATH"
           mkdir -p bundle dist dl
+          # modules that opt out of deployment (<maven.deploy.skip>true</maven.deploy.skip>, e.g. xrpl4j-coverage) are
+          # installed into ~/.m2 by `mvn install` but must not be published, exactly as `mvn deploy` would leave them out
+          SKIP_ARTIFACTS="$(python3 -I - <<'PY'
+          import glob
+          import xml.etree.ElementTree as ET
+          ns = {"m": "http://maven.apache.org/POM/4.0.0"}
+          for f in sorted(glob.glob("**/pom.xml", recursive=True)):
+              if "/target/" in f:
+                  continue
+              root = ET.parse(f).getroot()
+              props = root.find("m:properties", ns)
+              skip = props.find("m:maven.deploy.skip", ns) if props is not None else None
+              if skip is not None and (skip.text or "").strip().lower() == "true":
+                  print(root.find("m:artifactId", ns).text.strip())
+          PY
+          )"
+          echo "modules skipped (maven.deploy.skip=true): ${SKIP_ARTIFACTS:-none}"
           # only this exact version of each module; only jars and poms (no repository bookkeeping files)
           for d in "$SRC"/*/"$PACKAGE_VERSION"; do
             [[ -d "$d" ]] || continue
             art="$(basename "$(dirname "$d")")"
+            if grep -qx -- "$art" <<< "$SKIP_ARTIFACTS"; then echo "skipping $art (maven.deploy.skip=true)"; continue; fi
             dest="bundle/$GROUP_PATH/$art/$PACKAGE_VERSION"
             mkdir -p "$dest"
             find "$d" -maxdepth 1 -type f \( -name '*.jar' -o -name '*.pom' \) -exec cp {} "$dest/" \;
