@@ -127,7 +127,20 @@ jobs:
           gh pr create --repo "$REPO" --draft --base main --head "$RELEASE_BRANCH" \
             --title "Release ${PACKAGE_VERSION}: ${RELEASE_BRANCH} → main" \
             --body "Automated PR for release **${PACKAGE_VERSION}**. Workflow run: https://github.com/${REPO}/actions/runs/${{ github.run_id }}"
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+      # JDK 8 = the lowest version the pom targets (source/target 1.8), so the release jars cannot pick up newer JDK APIs.
+      # The runner image has no JDK 8, so it is downloaded; that download occasionally fails ("gzip: stdin: not in gzip
+      # format"), so try once more before failing the job.
+      - name: Set up JDK 8
+        id: java_first_try
+        continue-on-error: true
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '8'
+          cache: maven
+      - name: Set up JDK 8 (retry)
+        if: ${{ steps.java_first_try.outcome == 'failure' }}
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: '8'
