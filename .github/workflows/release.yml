@@ -263,7 +263,7 @@ jobs:
           curl -sS -X POST https://slack.com/api/chat.postMessage \
             -H "Authorization: Bearer $SLACK_TOKEN" \
             -H "Content-Type: application/json; charset=utf-8" \
-            -d "$(jq -n --arg channel "#xrpl4j" --arg text "$MSG" '{channel:$channel, text:$text}')" \
+            -d "$(jq -n --arg channel "#test-alert" --arg text "$MSG" '{channel:$channel, text:$text}')" \
             | jq -er '.ok' >/dev/null
 
   first_review:
@@ -293,7 +293,7 @@ jobs:
           curl -sS -X POST https://slack.com/api/chat.postMessage \
             -H "Authorization: Bearer $SLACK_TOKEN" \
             -H "Content-Type: application/json; charset=utf-8" \
-            -d "$(jq -n --arg channel "#ripplex-security" --arg text "$MSG" '{channel:$channel, text:$text}')" \
+            -d "$(jq -n --arg channel "#test-alert" --arg text "$MSG" '{channel:$channel, text:$text}')" \
             | jq -er '.ok' >/dev/null
 
   publish-to-maven-central:
@@ -489,5 +489,5 @@ jobs:
           curl -sS -X POST https://slack.com/api/chat.postMessage \
             -H "Authorization: Bearer $SLACK_TOKEN" \
             -H "Content-Type: application/json; charset=utf-8" \
-            -d "$(jq -n --arg channel "#xrpl4j" --arg text "$MSG" '{channel:$channel, text:$text}')" \
+            -d "$(jq -n --arg channel "#test-alert" --arg text "$MSG" '{channel:$channel, text:$text}')" \
             | jq -er '.ok' >/dev/null
