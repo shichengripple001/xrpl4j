@@ -37,11 +37,6 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.release_branch }}
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
-        with:
-          distribution: temurin
-          java-version: '8'
-          cache: maven
       - name: Extract and validate version
         id: version
         env:
@@ -54,7 +49,19 @@ jobs:
           if [[ "$TRIGGER_BRANCH" != "main" ]]; then
             echo "❌ Dispatch this workflow from main (current: $TRIGGER_BRANCH)." >&2; exit 1
           fi
-          VERSION="$(mvn -q -N help:evaluate -Dexpression=project.version -DforceStdout)"
+          # Read <project><version> from the root pom with Python (preinstalled on the runner); no JDK or Maven needed here.
+          VERSION="$(python3 -I - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("pom.xml").getroot()
+          v = root.find("{http://maven.apache.org/POM/4.0.0}version")
+          if v is None:
+              v = root.find("version")
+          print((v.text or "").strip() if v is not None else "")
+          PY
+          )"
+          if [[ "$VERSION" == *'${'* ]]; then
+            echo "❌ pom version '$VERSION' uses a property placeholder; commit a literal release version." >&2; exit 1
+          fi
           if [[ -z "$VERSION" || "$VERSION" == *SNAPSHOT* ]]; then
             echo "❌ pom version '$VERSION' is empty or a SNAPSHOT; set a release version on the release branch." >&2; exit 1
           fi
