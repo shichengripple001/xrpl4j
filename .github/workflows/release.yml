@@ -594,7 +594,7 @@ jobs:
         env:
           SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
         run: |
-          MSG="xrpl4j ${PACKAGE_VERSION} has been released to Maven Central. https://github.com/${{ github.repository }}/releases/tag/v${PACKAGE_VERSION}"
+          MSG="xrpl4j ${PACKAGE_VERSION} has been successfully released and published to Maven Central. Release URL: https://github.com/${{ github.repository }}/releases/tag/v${PACKAGE_VERSION}"
           curl -sS -X POST https://slack.com/api/chat.postMessage \
             -H "Authorization: Bearer $SLACK_TOKEN" \
             -H "Content-Type: application/json; charset=utf-8" \
