@@ -19,6 +19,10 @@ on:
         description: "Skip jobs/steps that depend on live networks/faucets (used for beta/rc releases)"
         type: boolean
         default: false
+      skip_clio_tests:
+        description: "FORK TESTING ONLY - skip the Testnet Clio job (revert before the PR to XRPLF)"
+        type: boolean
+        default: false
 jobs:
   resolve_xrpld_image:
     runs-on: ubuntu-latest
@@ -448,7 +452,7 @@ jobs:
         run: mvn clean install -Dmaven.javadoc.skip=true -DuseTestnet
 
   build_testnet_clio_its:
-    if: ${{ !inputs.skip_network_tests }}
+    if: ${{ !inputs.skip_network_tests && !inputs.skip_clio_tests }}
     runs-on: ubuntu-latest
     steps:
       # Checks-out the repository under $GITHUB_WORKSPACE

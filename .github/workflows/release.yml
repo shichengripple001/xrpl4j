@@ -13,6 +13,11 @@ on:
         required: false
         type: boolean
         default: false
+      skip_clio_tests:
+        description: "FORK TESTING ONLY - skip the Testnet Clio job (never in the XRPLF PR)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -91,6 +96,7 @@ jobs:
       skip_codecov: true
       # Beta/rc releases skip live-network and non-Linux jobs, like xrpl-py/xrpl.js skip network tests for pre-releases
       skip_network_tests: ${{ needs.input-validate.outputs.is_beta_release == 'true' }}
+      skip_clio_tests: ${{ inputs.skip_clio_tests }}
     secrets: inherit
 
   pre-release:
