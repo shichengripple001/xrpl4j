@@ -256,7 +256,6 @@ jobs:
       SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
     steps:
       - name: Notify Slack
-        if: ${{ env.SLACK_TOKEN != '' }}
         env:
           SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
           MSG: "${{ github.triggering_actor || github.actor }} is releasing xrpl4j ${{ needs.input-validate.outputs.package_version }} from ${{ github.event.inputs.release_branch }}. The dev team needs to review the release artifacts and approve/reject. (https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
@@ -287,7 +286,6 @@ jobs:
       SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
     steps:
       - name: Notify Slack
-        if: ${{ env.SLACK_TOKEN != '' }}
         env:
           SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
           MSG: "${{ github.triggering_actor || github.actor }} is releasing xrpl4j ${{ needs.input-validate.outputs.package_version }}. Security team: review vulnerabilities ${{ needs.pre-release.outputs.vuln_art_url }} and approve/reject. (https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
@@ -484,7 +482,6 @@ jobs:
             dist/**
             sbom/**
       - name: Notify Slack success
-        if: ${{ env.SLACK_TOKEN != '' }}
         env:
           SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
         run: |
