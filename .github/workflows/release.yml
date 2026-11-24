@@ -18,6 +18,11 @@ on:
         required: false
         type: boolean
         default: false
+      skip_ci_tests:
+        description: "FORK TESTING ONLY - skip the whole CI test suite (never in the XRPLF PR)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -90,6 +95,7 @@ jobs:
   ci-tests:
     name: CI build and tests (${{ needs.input-validate.outputs.package_version }}, ${{ needs.input-validate.outputs.is_beta_release == 'true' && 'beta' || 'official' }})
     needs: input-validate
+    if: ${{ !inputs.skip_ci_tests }}
     uses: ./.github/workflows/workflow.yml
     with:
       git_ref: ${{ github.event.inputs.release_branch }}
@@ -102,6 +108,7 @@ jobs:
   pre-release:
     name: Build, SBOM and vulnerability scan (${{ needs.input-validate.outputs.package_version }}, ${{ needs.input-validate.outputs.is_beta_release == 'true' && 'beta' || 'official' }})
     needs: [input-validate, ci-tests]
+    if: ${{ !cancelled() && needs.input-validate.result == 'success' && (needs.ci-tests.result == 'success' || needs.ci-tests.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -243,6 +250,7 @@ jobs:
   ask_for_dev_team_review:
     name: Request dev team review
     needs: [input-validate, pre-release]
+    if: ${{ !cancelled() && needs.pre-release.result == 'success' }}
     runs-on: ubuntu-latest
     env:
       SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
@@ -262,6 +270,7 @@ jobs:
   first_review:
     name: First approval (dev team)
     needs: [pre-release, ask_for_dev_team_review]
+    if: ${{ !cancelled() && needs.pre-release.result == 'success' && needs.ask_for_dev_team_review.result == 'success' }}
     runs-on: ubuntu-latest
     environment:
       name: first-review
@@ -272,6 +281,7 @@ jobs:
   ask_for_sec_team_review:
     name: Request security team review
     needs: [input-validate, pre-release, first_review]
+    if: ${{ !cancelled() && needs.pre-release.result == 'success' && needs.first_review.result == 'success' }}
     runs-on: ubuntu-latest
     env:
       SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
@@ -291,6 +301,7 @@ jobs:
   publish-to-maven-central:
     name: Publish to Maven Central (${{ needs.input-validate.outputs.package_version }}, ${{ needs.input-validate.outputs.is_beta_release == 'true' && 'beta' || 'official' }})
     needs: [input-validate, pre-release, first_review, ask_for_sec_team_review]
+    if: ${{ !cancelled() && needs.pre-release.result == 'success' && needs.first_review.result == 'success' && needs.ask_for_sec_team_review.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
@@ -444,7 +455,7 @@ jobs:
   github-release:
     name: GitHub Release (${{ needs.input-validate.outputs.package_version }}, ${{ needs.input-validate.outputs.is_beta_release == 'true' && 'beta' || 'official' }})
     needs: [input-validate, publish-to-maven-central]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ !cancelled() && !inputs.dry_run && needs.publish-to-maven-central.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
