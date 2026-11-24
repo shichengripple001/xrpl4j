@@ -3,10 +3,10 @@
   xmlns="http://maven.apache.org/POM/4.0.0"
   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>org.xrpl</groupId>
+  <groupId>io.github.shichengripple001</groupId>
   <artifactId>xrpl4j-parent</artifactId>
   <packaging>pom</packaging>
-  <version>HEAD-SNAPSHOT</version>
+  <version>0.0.3</version>
 
   <name>xrpl4j parent</name>
   <description>Parent project for xrpl4j modules.</description>
@@ -339,7 +339,7 @@
                   <ignoredDependency>com.google.errorprone:error_prone_annotations</ignoredDependency>
                   <ignoredDependency>ch.qos.logback:logback-classic</ignoredDependency>
                   <!-- Loaded via reflection-->
-                  <ignoredDependency>org.xrpl:xrpl4j-mpt-crypto</ignoredDependency>
+                  <ignoredDependency>io.github.shichengripple001:xrpl4j-mpt-crypto</ignoredDependency>
                   <!-- As part of SkyStreamer, but only for test scope-->
                   <ignoredDependency>com.vaadin.external.google:android-json</ignoredDependency>
                   <ignoredDependency>org.junit.jupiter:junit-jupiter-engine</ignoredDependency>
