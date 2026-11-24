@@ -252,14 +252,51 @@ jobs:
     needs: [input-validate, pre-release]
     if: ${{ !cancelled() && needs.pre-release.result == 'success' }}
     runs-on: ubuntu-latest
-    env:
-      SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+    outputs:
+      reviewers_dev: ${{ steps.get_reviewers.outputs.reviewers_dev }}
+      reviewers_sec: ${{ steps.get_reviewers.outputs.reviewers_sec }}
     steps:
+      - name: Look up the required reviewers of the approval environments
+        id: get_reviewers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ENV_DEV_NAME: first-review
+          ENV_SEC_NAME: ${{ needs.input-validate.outputs.is_beta_release == 'true' && 'beta-release' || 'official-release' }}
+        run: |
+          set -euo pipefail
+          org="${REPO%%/*}"
+          fetch_reviewers() {
+            local env_name="$1" env_json entries out=()
+            env_json="$(curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPO/environments/$env_name" || true)"
+            # one entry per reviewer: "User:<login>" or "Team:<slug>"
+            entries="$(printf '%s' "$env_json" | jq -r '
+              (.protection_rules // []) | map(select(.type=="required_reviewers") | .reviewers // []) | add // []
+              | map(if .type=="Team" then "Team:" + (.reviewer.slug // "unknown") else "User:" + (.reviewer.login // "unknown") end)
+              | unique | .[]' 2>/dev/null || true)"
+            if [ -z "$entries" ]; then printf '%s' "(no required reviewers configured)"; return; fi
+            while IFS= read -r e; do
+              case "$e" in
+                User:*) out+=("${e#User:}");;
+                Team:*) out+=("${e#Team:} (https://github.com/orgs/$org/teams/${e#Team:})");;
+              esac
+            done <<< "$entries"
+            printf '%s\n' "${out[@]}" | awk '!seen[$0]++' | paste -sd, - | sed 's/,/, /g'
+          }
+          echo "reviewers_dev=$(fetch_reviewers "$ENV_DEV_NAME")" >> "$GITHUB_OUTPUT"
+          echo "reviewers_sec=$(fetch_reviewers "$ENV_SEC_NAME")" >> "$GITHUB_OUTPUT"
       - name: Notify Slack
         env:
           SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
-          MSG: "${{ github.triggering_actor || github.actor }} is releasing xrpl4j ${{ needs.input-validate.outputs.package_version }} from ${{ github.event.inputs.release_branch }}. The dev team needs to review the release artifacts and approve/reject. (https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          EXECUTOR: ${{ github.triggering_actor || github.actor }}
+          PACKAGE_VERSION: ${{ needs.input-validate.outputs.package_version }}
+          RELEASE_BRANCH: ${{ github.event.inputs.release_branch }}
+          DEV_REVIEWERS: ${{ steps.get_reviewers.outputs.reviewers_dev }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          set -euo pipefail
+          MSG="${EXECUTOR} is releasing xrpl4j ${PACKAGE_VERSION} from ${RELEASE_BRANCH}. A member from the dev team (${DEV_REVIEWERS}) needs to review the release artifacts and approve/reject the release. (${RUN_URL})"
           curl -sS -X POST https://slack.com/api/chat.postMessage \
             -H "Authorization: Bearer $SLACK_TOKEN" \
             -H "Content-Type: application/json; charset=utf-8" \
@@ -279,17 +316,23 @@ jobs:
 
   ask_for_sec_team_review:
     name: Request security team review
-    needs: [input-validate, pre-release, first_review]
+    needs: [input-validate, pre-release, first_review, ask_for_dev_team_review]
     if: ${{ !cancelled() && needs.pre-release.result == 'success' && needs.first_review.result == 'success' }}
     runs-on: ubuntu-latest
-    env:
-      SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
     steps:
       - name: Notify Slack
         env:
           SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
-          MSG: "${{ github.triggering_actor || github.actor }} is releasing xrpl4j ${{ needs.input-validate.outputs.package_version }}. Security team: review vulnerabilities ${{ needs.pre-release.outputs.vuln_art_url }} and approve/reject. (https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          EXECUTOR: ${{ github.triggering_actor || github.actor }}
+          PACKAGE_VERSION: ${{ needs.input-validate.outputs.package_version }}
+          RELEASE_BRANCH: ${{ github.event.inputs.release_branch }}
+          SEC_REVIEWERS: ${{ needs.ask_for_dev_team_review.outputs.reviewers_sec }}
+          VULN_ART_URL: ${{ needs.pre-release.outputs.vuln_art_url }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          set -euo pipefail
+          MSG="${EXECUTOR} is releasing xrpl4j ${PACKAGE_VERSION} from ${RELEASE_BRANCH}. A member from the sec reviewer team (${SEC_REVIEWERS}) needs to take the following action:\nReview the vulnerabilities ${VULN_ART_URL} and approve/reject the release. (${RUN_URL})"
+          MSG="$(printf '%b' "$MSG")"
           curl -sS -X POST https://slack.com/api/chat.postMessage \
             -H "Authorization: Bearer $SLACK_TOKEN" \
             -H "Content-Type: application/json; charset=utf-8" \
