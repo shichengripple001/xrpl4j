@@ -600,3 +600,58 @@ jobs:
             -H "Content-Type: application/json; charset=utf-8" \
             -d "$(jq -n --arg channel "#test-alert" --arg text "$MSG" '{channel:$channel, text:$text}')" \
             | jq -er '.ok' >/dev/null
+
+  # Same approach as xrpl.js: one job that posts to Slack, naming the job(s) that failed, when any stage of the release fails.
+  notify_failures:
+    name: Notify Slack if the release fails
+    runs-on: ubuntu-latest
+    needs:
+      [
+        input-validate,
+        ci-tests,
+        pre-release,
+        ask_for_dev_team_review,
+        first_review,
+        ask_for_sec_team_review,
+        publish-to-maven-central,
+        github-release,
+      ]
+    if: >-
+      ${{ always() && (
+        needs.input-validate.result == 'failure' ||
+        needs.ci-tests.result == 'failure' ||
+        needs.pre-release.result == 'failure' ||
+        needs.ask_for_dev_team_review.result == 'failure' ||
+        needs.first_review.result == 'failure' ||
+        needs.ask_for_sec_team_review.result == 'failure' ||
+        needs.publish-to-maven-central.result == 'failure' ||
+        needs.github-release.result == 'failure'
+      ) }}
+    steps:
+      - name: Notify Slack about workflow failure
+        env:
+          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+          PKG_VERSION: ${{ needs.input-validate.outputs.package_version }}
+          RELEASE_BRANCH: ${{ github.event.inputs.release_branch }}
+          NEEDS_JSON: ${{ toJson(needs) }}
+        run: |
+          set -euo pipefail
+          FAILED_JOBS=$(printf '%s' "$NEEDS_JSON" | jq -r '
+            to_entries
+            | map(select(.value.result=="failure") | .key)
+            | join(", ")
+          ')
+          if [ -z "$FAILED_JOBS" ]; then
+            echo "No failed jobs detected; skipping notification."
+            exit 0
+          fi
+
+          MESSAGE="❌ Workflow failure for xrpl4j@${PKG_VERSION} (${RELEASE_BRANCH}). Release failed at ${FAILED_JOBS}. For details: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer $SLACK_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+                  --arg channel '#test-alert' \
+                  --arg text "${MESSAGE}" \
+                  '{channel: $channel, text: $text}')" \
+            | jq -er '.ok' >/dev/null
