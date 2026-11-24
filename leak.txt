@@ -1,0 +1,1 @@
+https://artifactory.ops.ripple.com/example
