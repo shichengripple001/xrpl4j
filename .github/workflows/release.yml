@@ -118,6 +118,7 @@ jobs:
       pull-requests: write
     outputs:
       vuln_art_url: ${{ steps.vuln_art.outputs.art_url }}
+      release_pr_url: ${{ steps.release_pr.outputs.pr_url }}
     env:
       PACKAGE_VERSION: ${{ needs.input-validate.outputs.package_version }}
       OWASP_TOKEN: ${{ secrets.OWASP_TOKEN }}
@@ -127,6 +128,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.release_branch }}
       - name: Create draft PR from release branch to main (stable only)
+        id: release_pr
         if: ${{ needs.input-validate.outputs.is_beta_release != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -136,10 +138,16 @@ jobs:
           set -euo pipefail
           OWNER="${REPO%%/*}"
           EXISTING="$(gh api "/repos/$REPO/pulls?state=open&base=main&head=${OWNER}:${RELEASE_BRANCH}" --jq '.[0].html_url // empty')"
-          if [[ -n "$EXISTING" ]]; then echo "ℹ️ PR already exists: $EXISTING"; exit 0; fi
-          gh pr create --repo "$REPO" --draft --base main --head "$RELEASE_BRANCH" \
+          if [[ -n "$EXISTING" ]]; then
+            echo "ℹ️ PR already exists: $EXISTING"
+            echo "pr_url=$EXISTING" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          PR_URL="$(gh pr create --repo "$REPO" --draft --base main --head "$RELEASE_BRANCH" \
             --title "Release ${PACKAGE_VERSION}: ${RELEASE_BRANCH} → main" \
-            --body "Automated PR for release **${PACKAGE_VERSION}**. Workflow run: https://github.com/${REPO}/actions/runs/${{ github.run_id }}"
+            --body "Automated PR for release **${PACKAGE_VERSION}**. Workflow run: https://github.com/${REPO}/actions/runs/${{ github.run_id }}")"
+          echo "Created PR: $PR_URL"
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
       # JDK 8 = the lowest version the pom targets (source/target 1.8), so the release jars cannot pick up newer JDK APIs.
       # The runner image has no JDK 8, so it is downloaded; that download occasionally fails ("gzip: stdin: not in gzip
       # format"), so try once more before failing the job.
@@ -378,9 +386,13 @@ jobs:
           RELEASE_BRANCH: ${{ github.event.inputs.release_branch }}
           DEV_REVIEWERS: ${{ steps.get_reviewers.outputs.reviewers_dev }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PR_URL: ${{ needs.pre-release.outputs.release_pr_url }}
         run: |
           set -euo pipefail
           MSG="${EXECUTOR} is releasing xrpl4j ${PACKAGE_VERSION} from ${RELEASE_BRANCH}. A member from the dev team (${DEV_REVIEWERS}) needs to review the release artifacts and approve/reject the release. (${RUN_URL})"
+          if [ -n "${PR_URL}" ]; then
+            MSG="${MSG}"$'\n'"Release PR (draft, release branch -> main; do not merge before the release is published): ${PR_URL}"
+          fi
           curl -sS -X POST https://slack.com/api/chat.postMessage \
             -H "Authorization: Bearer $SLACK_TOKEN" \
             -H "Content-Type: application/json; charset=utf-8" \
