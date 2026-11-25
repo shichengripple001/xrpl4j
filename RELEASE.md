@@ -31,8 +31,11 @@ Actions tab instead.
 
 ## Version rules
 
-- `main` keeps the placeholder version `HEAD-SNAPSHOT`. The release version is set **on the release branch** and
-  **committed** there, because the workflow reads it from the pom. Do not release a `-SNAPSHOT` version.
+- The release version is set **on the release branch** and **committed** there, because the workflow reads it from the
+  pom. Do not release a `-SNAPSHOT` version.
+- After a stable release the release branch is merged into `main` (see
+  [Merging a stable release into main](#merging-a-stable-release-into-main)), so `main` carries the version of the
+  release branch from then on. The workflow reads the version from the release branch, never from `main`.
 - **Stable releases**: the version must be exactly `[major].[minor].[patch]` (for example `6.1.0`) and the branch name
   must start with `release-`, `release/`, `releases-` or `releases/` (for example `releases/v6.1`).
 - **Pre-releases**: a version that contains `rc`, `alpha` or `beta` (for example `7.0.0-rc.6`) is treated as a
@@ -94,8 +97,9 @@ Follow these steps to create a new major or minor release.
    > git push
    > ```
 
-7. Review the generated release notes on the GitHub release `v[major].[minor].0` and edit them if needed. Review the
-   draft PR the pipeline opened from the release branch to `main`.
+7. Review the generated release notes on the GitHub release `v[major].[minor].0` and edit them if needed.
+8. Merge the draft PR into `main` as described in
+   [Merging a stable release into main](#merging-a-stable-release-into-main).
 
 ## Patch Releases
 
@@ -142,6 +146,19 @@ already be merged or cherry-picked into this branch.
    > ```
 
 7. Review the generated release notes on the GitHub release `v[major].[minor].[patch]`.
+8. Merge the draft PR into `main` as described in
+   [Merging a stable release into main](#merging-a-stable-release-into-main).
+
+## Merging a stable release into main
+
+After a stable release, the pipeline has opened a draft PR from the release branch to `main`. Merge it so that `main`
+contains the release version and the fixes made on the release branch.
+
+1. Finish the release first, including the bump to the next `-SNAPSHOT` version on the release branch (step 6 above).
+   The PR then brings `main` to that next snapshot version.
+2. Mark the draft PR ready for review, get it approved and merge it. Resolve any conflicts in `pom.xml` files in favour
+   of the release branch version.
+3. Pre-releases (rc/alpha/beta) do not open a PR and are not merged into `main` unless their branch is merged as normal.
 
 ## Release Candidates
 
