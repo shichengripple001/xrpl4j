@@ -168,8 +168,16 @@ jobs:
           cache: maven
       # Build ONCE here: the files in this bundle are attested below and later published unchanged (only signed).
       # `install` does not run the Central publishing plugin (bound to `deploy`), so no Central credentials are needed here.
+      # The xrpl4j-mpt-crypto module downloads its native libraries from a GitHub release during the build; that download
+      # occasionally times out, so try the build up to 3 times before failing the job.
       - name: Build unsigned artifacts (no signing, no upload)
-        run: mvn -B clean install -Prelease -DskipTests -Dgpg.skip=true
+        run: |
+          for attempt in 1 2 3; do
+            if mvn -B clean install -Prelease -DskipTests -Dgpg.skip=true; then exit 0; fi
+            echo "::warning::Maven build failed (attempt $attempt of 3)"
+            [ "$attempt" -lt 3 ] && sleep 20
+          done
+          exit 1
       - name: Collect artifacts into a Maven Central bundle
         run: |
           set -euo pipefail
